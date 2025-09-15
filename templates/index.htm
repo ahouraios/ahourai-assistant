@@ -1,0 +1,21 @@
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Ahourai Assistant - Authenticate</title>
+        <style>
+            body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f4f4f9; }
+            .container { text-align: center; }
+            a { background-color: #4285F4; color: white; padding: 15px 25px; text-decoration: none; border-radius: 5px; font-size: 1.2em; }
+            a:hover { background-color: #357ae8; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Welcome to Ahourai Assistant</h1>
+            <p>Please authorize with your Google Account to continue.</p>
+            <br>
+            <a href="{{ authorization_url }}">Login with Google</a>
+        </div>
+    </body>
+    </html>
