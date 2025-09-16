@@ -1,122 +1,63 @@
-import os
-import json
-from flask import Flask, redirect, url_for, session, request, jsonify
-from authlib.integrations.flask_client import OAuth
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build
-from werkzeug.middleware.proxy_fix import ProxyFix # <--- تغییر ۱: ایمپورت جدید
+    import os
+    from flask import Flask, redirect, url_for, session, request
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    from authlib.integrations.flask_client import OAuth
 
-# Load client secrets from a file
-CLIENT_SECRETS_FILE = "client_secrets.json"
-SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+    # پیکربندی Flask
+    app = Flask(__name__)
+    # SECRET_KEY برای امن کردن session استفاده می‌شود. حتماً در Render تنظیم شود.
+    app.secret_key = os.environ.get("SECRET_KEY", "a_default_dev_secret_key_that_is_long_and_random")
 
-app = Flask(__name__)
-# Flask secret key required for session management
-app.secret_key = os.urandom(24)
+    # اعمال ProxyFix برای تشخیص درست پروتکل (HTTPS) و میزبان در پشت پروکسی Render
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 
-# تغییر ۲: این خط برای مدیریت صحیح HTTPS پشت پروکسی Render اضافه شده است
-app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
-
-@app.route('/')
-def index():
-    if 'credentials' not in session:
-        return '<a href="/login">Login with Google</a>'
-    
-    # Optional: You can show user info if they are already logged in
-    # For now, let's just show a link to view files
-    return 'Logged in. <a href="/drive/files">View Google Drive Files</a>'
-
-@app.route('/login')
-def login():
-    # Create a flow instance to manage the OAuth 2.0 Authorization flow.
-    flow = Flow.from_client_secrets_file(
-        CLIENT_SECRETS_FILE,
-        scopes=SCOPES,
-        redirect_uri=url_for('oauth2callback', _external=True)
+    # تنظیمات OAuth با خواندن از متغیرهای محیطی
+    oauth = OAuth(app)
+    google = oauth.register(
+        name='google',
+        client_id=os.environ.get("GOOGLE_CLIENT_ID"),
+        client_secret=os.environ.get("GOOGLE_CLIENT_SECRET"),
+        access_token_url='https://accounts.google.com/o/oauth2/token',
+        access_token_params=None,
+        authorize_url='https://accounts.google.com/o/oauth2/auth',
+        authorize_params=None,
+        api_base_url='https://www.googleapis.com/oauth2/v1/',
+        # اسکوپ‌ها: openid, email, profile اطلاعات پایه کاربر را درخواست می‌کنند
+        client_kwargs={'scope': 'openid email profile'},
+        # نام سرور برای فراخوانی‌های بعدی
+        server_metadata_url='https://accounts.google.com/.well-known/openid-configuration'
     )
 
-    # The url_for('oauth2callback', _external=True) generates the absolute callback URL.
-    # _external=True is crucial for generating a full URL like https://.../oauth2callback
-    # ProxyFix ensures that this URL uses https instead of http.
+    @app.route('/')
+    def index():
+        user = session.get('user')
+        if user:
+            return f'سلام {user["name"]}! <br> ایمیل: {user["email"]} <br><a href="/logout">خروج</a>'
+        return '<h1>پروژه اهورایی</h1><a href="/login">ورود با گوگل</a>'
 
-    authorization_url, state = flow.authorization_url(
-        access_type='offline',
-        include_granted_scopes='true'
-    )
+    @app.route('/login')
+    def login():
+        # آدرس بازگشت (callback) را به صورت داینامیک و با پروتکل صحیح تولید می‌کنیم
+        redirect_uri = url_for('auth', _external=True)
+        return google.authorize_redirect(redirect_uri)
 
-    # Store the state so we can verify it in the callback
-    session['state'] = state
-    
-    return redirect(authorization_url)
+    @app.route('/auth')
+    def auth():
+        # دریافت توکن دسترسی از گوگل
+        token = google.authorize_access_token()
+        # دریافت اطلاعات کاربر با استفاده از توکن
+        user_info = google.parse_id_token(token)
+        # ذخیره اطلاعات کاربر در session
+        session['user'] = user_info
+        return redirect('/')
 
+    @app.route('/logout')
+    def logout():
+        # پاک کردن اطلاعات کاربر از session
+        session.pop('user', None)
+        return redirect('/')
 
-@app.route('/oauth2callback')
-def oauth2callback():
-    # Verify the state to protect against CSRF attacks
-    state = session.pop('state', None)
-    if not state or state != request.args.get('state'):
-        return 'State mismatch error', 400
-
-    flow = Flow.from_client_secrets_file(
-        CLIENT_SECRETS_FILE,
-        scopes=SCOPES,
-        redirect_uri=url_for('oauth2callback', _external=True)
-    )
-
-    # Exchange the authorization code for an access token
-    flow.fetch_token(authorization_response=request.url)
-    
-    # Store the credentials in the session
-    credentials = flow.credentials
-    session['credentials'] = {
-        'token': credentials.token,
-        'refresh_token': credentials.refresh_token,
-        'token_uri': credentials.token_uri,
-        'client_id': credentials.client_id,
-        'client_secret': credentials.client_secret,
-        'scopes': credentials.scopes
-    }
-
-    return redirect(url_for('index'))
-
-
-@app.route('/drive/files')
-def drive_files():
-    if 'credentials' not in session:
-        return redirect(url_for('login'))
-
-    # Load credentials from the session
-    creds = Credentials(**session['credentials'])
-
-    try:
-        # Build the Google Drive service
-        service = build('drive', 'v3', credentials=creds)
-
-        # Call the Drive v3 API
-        results = service.files().list(
-            pageSize=10, fields="nextPageToken, files(id, name)").execute()
-        items = results.get('files', [])
-
-        if not items:
-            return "No files found."
-        
-        # Create a simple list of file names
-        file_list = "Files:<br>" + "<br>".join([f"{file['name']} (ID: {file['id']})" for file in items])
-        return file_list
-
-    except Exception as e:
-        return f"An error occurred: {e}"
-
-
-@app.route('/logout')
-def logout():
-    session.pop('credentials', None)
-    return redirect(url_for('index'))
-
-if __name__ == "__main__":
-    # This block is for local development. 
-    # Render uses the 'gunicorn' command and ignores this.
-    # We ensure it listens on all IPs and gets the port from the environment.
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    if __name__ == '__main__':
+        # این بخش فقط در زمان اجرای محلی (local) استفاده می‌شود
+        port = int(os.environ.get("PORT", 8080))
+        app.run(host='0.0.0.0', port=port, debug=True)
