@@ -92,8 +92,9 @@ def logout():
     session.pop('credentials', None)
     return 'You have been logged out. <a href="/">Login again</a>'
 
-# این بخش برای اجرای محلی است و در Render استفاده نمی‌شود
-if __name__ == '__main__':
-    # توجه: برای اجرای محلی، باید متغیرهای محیطی را تنظیم کنید
-    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
-    app.run('localhost', 8080, debug=True)
+    if __name__ == "__main__":
+        # Render به صورت خودکار متغیر محیطی PORT را تنظیم می‌کند.
+        # اگر این متغیر وجود نداشت، از پورت 10000 به عنوان پیش‌فرض استفاده می‌کنیم.
+        port = int(os.environ.get('PORT', 10000))
+        # برای اینکه سرویس از خارج از کانتینر قابل دسترس باشد، باید روی 0.0.0.0 اجرا شود.
+        app.run(host='0.0.0.0', port=port)
